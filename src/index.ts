@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { createInterface } from "readline";
 import http from "http";
@@ -351,28 +351,46 @@ function waitForAgentFix(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Restart the demo server so it picks up code changes
 // ---------------------------------------------------------------------------
-function restartServer(): void {
+async function restartServer(): Promise<void> {
   console.log(`  ${DIM}Restarting demo server to pick up code changes...${RESET}`);
+  
+  // Kill existing server
   try {
     execSync("lsof -ti:3001 | xargs kill -9 2>/dev/null", { stdio: "pipe" });
   } catch { /* nothing on port */ }
 
-  // Start server in background — detached so it survives this process
-  execSync("npx tsx src/server.ts &", { stdio: "pipe", shell: "/bin/zsh" });
+  // Give the port time to release
+  await new Promise(r => setTimeout(r, 500));
 
-  // Wait for server to be ready
-  execSync("sleep 2", { stdio: "pipe" });
-  console.log(`  ${GREEN}Server restarted.${RESET}`);
+  // Start server in background using spawn (properly detached)
+  const child = spawn("npx", ["tsx", "src/server.ts"], {
+    detached: true,
+    stdio: "ignore",
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  // Wait for server to be ready (poll up to 5 seconds)
+  console.log(`  ${DIM}Waiting for server...${RESET}`);
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    const up = await checkServerRunning();
+    if (up) {
+      console.log(`  ${GREEN}Server restarted.${RESET}`);
+      return;
+    }
+  }
+  console.log(`  ${YELLOW}Server may still be starting, continuing...${RESET}`);
 }
 
 // ---------------------------------------------------------------------------
 // Step F: Validate fix — restart server, re-run Playwright test
 // ---------------------------------------------------------------------------
-function validateFix(testPath: string): boolean {
+async function validateFix(testPath: string): Promise<boolean> {
   console.log(`\n${CYAN}${BOLD}[T-1000] Step F: Validating fix...${RESET}\n`);
 
   // Restart server so it loads the edited code
-  restartServer();
+  await restartServer();
 
   try {
     execSync(`npx playwright test ${testPath} --reporter=line`, { stdio: "inherit" });
@@ -474,7 +492,7 @@ async function runT1000Pipeline(): Promise<void> {
     await waitForAgentFix();
 
     // Step F: Validate
-    fixed = validateFix(testPath);
+    fixed = await validateFix(testPath);
     if (!fixed) {
       console.log(`\n${YELLOW}${BOLD}[T-1000] Looping back — try a different fix.${RESET}\n`);
     }
