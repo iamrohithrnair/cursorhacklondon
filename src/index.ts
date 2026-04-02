@@ -431,9 +431,20 @@ function shipFix(issue: SentryIssue): void {
   // Push branch and create PR — gracefully skip if gh is not configured
   try {
     execSync(`git push origin ${branch} --force`, { stdio: "inherit" });
+    
+    // Build PR body - escape any backticks in issue data
+    const prBody = `## Automated Fix by T-1000
+
+**Sentry Issue:** ${issue.id}
+**Error:** ${issue.title}
+**Trace:** \`${issue.trace}\`
+**Endpoint:** \`${issue.requestMethod} ${issue.requestPath}\`
+
+This fix was detected, reproduced with Playwright, and validated automatically.`;
+
     execSync(
-      `gh pr create --title "T-1000: Fix ${issue.id}" --body "$(cat <<'PRBODY'\n## Automated Fix by T-1000\n\n**Sentry Issue:** ${issue.id}\n**Error:** ${issue.title}\n**Trace:** \`${issue.trace}\`\n**Endpoint:** \`${issue.requestMethod} ${issue.requestPath}\`\n\nThis fix was detected, reproduced with Playwright, and validated automatically.\nPRBODY\n)"`,
-      { stdio: "inherit" },
+      `gh pr create --title "T-1000: Fix ${issue.id}" --body "${prBody.replace(/"/g, '\\"')}"`,
+      { stdio: "inherit", shell: "/bin/bash" },
     );
     console.log(`\n${GREEN}${BOLD}[T-1000] PR created successfully!${RESET}`);
   } catch {
