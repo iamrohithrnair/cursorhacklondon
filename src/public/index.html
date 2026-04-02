@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>T-1000 Demo Store</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 40px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+    }
+    h1 { font-size: 1.8rem; margin-bottom: 8px; color: #fff; }
+    .subtitle { color: #888; margin-bottom: 32px; font-size: 0.9rem; }
+    .cart-items {
+      text-align: left;
+      margin-bottom: 24px;
+      border-top: 1px solid #333;
+      padding-top: 16px;
+    }
+    .cart-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #222;
+    }
+    .cart-item .name { color: #ccc; }
+    .cart-item .price { color: #4ecdc4; font-weight: 600; }
+    #checkout-btn {
+      background: #e94560;
+      color: white;
+      border: none;
+      padding: 14px 32px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      width: 100%;
+      transition: background 0.2s;
+    }
+    #checkout-btn:hover { background: #c73750; }
+    #checkout-btn:active { transform: scale(0.98); }
+    .error-boundary {
+      display: none;
+      background: #2d1320;
+      border: 1px solid #e94560;
+      color: #ff6b6b;
+      padding: 16px;
+      border-radius: 8px;
+      margin-top: 16px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      text-align: left;
+      word-break: break-word;
+    }
+    .success {
+      display: none;
+      background: #132d1b;
+      border: 1px solid #4ecdc4;
+      color: #4ecdc4;
+      padding: 16px;
+      border-radius: 8px;
+      margin-top: 16px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>T-1000 Demo Store</h1>
+    <p class="subtitle">Autonomous Software Factory Demo</p>
+
+    <div class="cart-items">
+      <div class="cart-item">
+        <span class="name">Mechanical Keyboard x1</span>
+        <span class="price">$149.99</span>
+      </div>
+      <div class="cart-item">
+        <span class="name">USB-C Hub x2</span>
+        <span class="price">$99.98</span>
+      </div>
+    </div>
+
+    <button id="checkout-btn">Checkout</button>
+
+    <div class="error-boundary"></div>
+    <div class="success"></div>
+  </div>
+
+  <script>
+    document.getElementById('checkout-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('checkout-btn');
+      const errorDiv = document.querySelector('.error-boundary');
+      const successDiv = document.querySelector('.success');
+      btn.textContent = 'Processing...';
+      btn.disabled = true;
+      errorDiv.style.display = 'none';
+      successDiv.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/checkout', { method: 'POST' });
+        const data = await res.json();
+
+        if (!res.ok) {
+          errorDiv.textContent = data.error || 'Something went wrong';
+          errorDiv.style.display = 'block';
+          btn.textContent = 'Checkout';
+          btn.disabled = false;
+        } else {
+          successDiv.textContent = `Order placed! ID: ${data.orderId} — Total: $${data.total}`;
+          successDiv.style.display = 'block';
+          btn.textContent = 'Order Placed!';
+        }
+      } catch (err) {
+        errorDiv.textContent = err.message;
+        errorDiv.style.display = 'block';
+        btn.textContent = 'Checkout';
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
