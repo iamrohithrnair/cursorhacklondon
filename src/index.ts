@@ -354,7 +354,7 @@ function waitForAgentFix(): Promise<void> {
 function restartServer(): void {
   console.log(`  ${DIM}Restarting demo server to pick up code changes...${RESET}`);
   try {
-    execSync("lsof -ti:3000 | xargs kill -9 2>/dev/null", { stdio: "pipe" });
+    execSync("lsof -ti:3001 | xargs kill -9 2>/dev/null", { stdio: "pipe" });
   } catch { /* nothing on port */ }
 
   // Start server in background — detached so it survives this process
