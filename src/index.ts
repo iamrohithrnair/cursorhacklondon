@@ -1,5 +1,5 @@
 import { execSync } from "child_process";
-import { writeFileSync, readFileSync, existsSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { createInterface } from "readline";
 import http from "http";
 import https from "https";
@@ -34,11 +34,63 @@ const RESET = "\x1b[0m";
 interface SentryIssue {
   id: string;
   title: string;
-  breadcrumbs: string[];
+  culprit: string;
   trace: string;
+  requestMethod: string;
+  requestPath: string;
 }
 
-// Sentry API helper
+// ---------------------------------------------------------------------------
+// Route map: maps API endpoints to the frontend page + actions that trigger them.
+// This lets us generate accurate Playwright tests from server-side Sentry events.
+// ---------------------------------------------------------------------------
+interface RouteAction {
+  page: string;         // frontend page to navigate to
+  actions: string[];    // Playwright actions (goto is automatic)
+  assertions: string[]; // what to assert after actions
+}
+
+const ROUTE_MAP: Record<string, RouteAction> = {
+  "POST /api/checkout": {
+    page: "/",
+    actions: [
+      "await page.locator('#checkout-btn').click();",
+    ],
+    assertions: [
+      "await expect(page.locator('#checkout-btn')).toBeVisible();",
+      "await expect(page.locator('.error-boundary')).not.toBeVisible();",
+    ],
+  },
+  "GET /api/search": {
+    page: "/products",
+    actions: [
+      "await page.locator('#search-input').fill('peripherals');",
+      "await page.locator('#search-btn').click();",
+    ],
+    assertions: [
+      "await expect(page.locator('.search-results')).toBeVisible();",
+      "await expect(page.locator('.error-boundary')).not.toBeVisible();",
+    ],
+  },
+};
+
+// Fallback: generic route for unknown endpoints
+function getFallbackRoute(method: string, urlPath: string): RouteAction {
+  return {
+    page: "/",
+    actions: [
+      `// Trigger: ${method} ${urlPath}`,
+      "// Add manual actions here if needed",
+    ],
+    assertions: [
+      "await expect(page.locator('.error-boundary')).not.toBeVisible();",
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sentry API
+// ---------------------------------------------------------------------------
 function sentryApiGet(endpoint: string): Promise<string> {
   const token = process.env.SENTRY_AUTH_TOKEN;
   if (!token) throw new Error("SENTRY_AUTH_TOKEN not set in .env");
@@ -86,13 +138,15 @@ function sentryProjectApiGet(endpoint: string): Promise<string> {
   });
 }
 
+// ---------------------------------------------------------------------------
 // Step A: Detect — fetch latest unresolved Sentry issue
+// ---------------------------------------------------------------------------
 async function fetchLatestSentryIssue(): Promise<SentryIssue> {
   console.log(`\n${CYAN}${BOLD}[T-1000] Step A: Querying Sentry for latest unresolved issue...${RESET}\n`);
 
-  // Fetch latest unresolved issue
   const issuesRaw = await sentryProjectApiGet("issues/?query=is:unresolved&sort=date&limit=1");
-  const issues = JSON.parse(issuesRaw);
+  let issues: any[];
+  try { issues = JSON.parse(issuesRaw); } catch { issues = []; }
 
   if (!issues.length) {
     console.log(`  ${GREEN}No unresolved issues found in Sentry. Nothing to fix.${RESET}`);
@@ -100,31 +154,31 @@ async function fetchLatestSentryIssue(): Promise<SentryIssue> {
   }
 
   const issue = issues[0];
-  const issueId = issue.shortId || issue.id;
-  const title = issue.title;
+  const issueId = issue.shortId || `SENTRY-${issue.id}`;
+  const title = issue.title || "Unknown error";
+  const culprit = issue.culprit || "";
 
   console.log(`  ${BOLD}Issue:${RESET}       ${issueId} — ${RED}${title}${RESET}`);
+  console.log(`  ${BOLD}Culprit:${RESET}     ${culprit}`);
   console.log(`  ${BOLD}Level:${RESET}       ${issue.level}`);
-  console.log(`  ${BOLD}First seen:${RESET}  ${issue.firstSeen}`);
   console.log(`  ${BOLD}Events:${RESET}      ${issue.count}`);
 
-  // Fetch latest event for stack trace and breadcrumbs
+  // Fetch latest event for stack trace
   console.log(`\n  ${DIM}Fetching event details...${RESET}`);
   const eventRaw = await sentryApiGet(`issues/${issue.id}/events/latest/`);
-  const event = JSON.parse(eventRaw);
+  let event: any;
+  try { event = JSON.parse(eventRaw); } catch { event = {}; }
 
   // Extract in-app stack trace (deepest in-app frame = root cause)
   let trace = "";
   const cwd = process.cwd();
   for (const entry of event.entries || []) {
     if (entry.type === "exception") {
-      for (const val of entry.data.values) {
+      for (const val of entry.data?.values || []) {
         const frames = val.stacktrace?.frames || [];
-        // Find the deepest in-app frame (last in array = top of stack)
         for (let i = frames.length - 1; i >= 0; i--) {
           const frame = frames[i];
           if (frame.inApp && frame.filename) {
-            // Convert absolute path to relative
             let filePath = frame.filename;
             if (filePath.startsWith(cwd)) {
               filePath = filePath.slice(cwd.length + 1);
@@ -133,50 +187,27 @@ async function fetchLatestSentryIssue(): Promise<SentryIssue> {
             break;
           }
         }
+        if (trace) break;
       }
     }
   }
 
-  // Extract breadcrumbs
-  const breadcrumbs: string[] = [];
+  // Extract request context
+  let requestMethod = "";
+  let requestPath = "";
   for (const entry of event.entries || []) {
-    if (entry.type === "breadcrumbs") {
-      for (const bc of entry.data.values) {
-        const cat = bc.category || "unknown";
-        const msg = bc.message || "";
-        if (cat === "http" && bc.data) {
-          breadcrumbs.push(`HTTP ${bc.data.method || "GET"} ${bc.data.url || ""} → ${bc.data.status_code || "?"}`);
-        } else if (cat === "navigation" && bc.data) {
-          breadcrumbs.push(`User navigated to ${bc.data.to || bc.data.from || "/"}`);
-        } else if (cat === "ui.click") {
-          breadcrumbs.push(`User clicked ${msg}`);
-        } else if (msg) {
-          breadcrumbs.push(`[${cat}] ${msg}`);
-        }
-      }
+    if (entry.type === "request" && entry.data?.url) {
+      requestMethod = entry.data.method || "GET";
+      try { requestPath = new URL(entry.data.url).pathname; } catch { /* ignore */ }
     }
   }
 
-  // Infer user-facing breadcrumbs from request context
-  // API endpoints aren't user-navigable, so map them to the page + action that triggered them
-  if (!breadcrumbs.some((b) => b.startsWith("User navigated") || b.startsWith("User clicked"))) {
-    let requestPath = "";
-    for (const entry of event.entries || []) {
-      if (entry.type === "request" && entry.data?.url) {
-        try { requestPath = new URL(entry.data.url).pathname; } catch { /* ignore */ }
-      }
-    }
-    const culprit = issue.culprit || "";
-
-    if (requestPath.includes("/api/checkout") || culprit.includes("/api/checkout")) {
-      breadcrumbs.length = 0;
-      breadcrumbs.push("User navigated to /");
-      breadcrumbs.push("User clicked #checkout-btn");
-    } else if (requestPath && !requestPath.startsWith("/api/")) {
-      breadcrumbs.unshift(`User navigated to ${requestPath}`);
-    } else {
-      breadcrumbs.length = 0;
-      breadcrumbs.push("User navigated to /");
+  // Infer from culprit if no request entry
+  if (!requestMethod && culprit) {
+    const match = culprit.match(/^(GET|POST|PUT|DELETE|PATCH)\s+(.+)/);
+    if (match) {
+      requestMethod = match[1];
+      requestPath = match[2];
     }
   }
 
@@ -186,12 +217,14 @@ async function fetchLatestSentryIssue(): Promise<SentryIssue> {
   }
 
   console.log(`  ${BOLD}Trace:${RESET}       ${CYAN}${trace}${RESET}`);
-  console.log(`  ${BOLD}Breadcrumbs:${RESET} ${breadcrumbs.join(` ${DIM}→${RESET} `)}`);
+  console.log(`  ${BOLD}Endpoint:${RESET}    ${requestMethod} ${requestPath}`);
 
-  return { id: issueId, title, breadcrumbs, trace };
+  return { id: issueId, title, culprit, trace, requestMethod, requestPath };
 }
 
+// ---------------------------------------------------------------------------
 // Check if demo server is running
+// ---------------------------------------------------------------------------
 function checkServerRunning(): Promise<boolean> {
   return new Promise((resolve) => {
     const req = http.get("http://localhost:3000", (res) => {
@@ -199,54 +232,59 @@ function checkServerRunning(): Promise<boolean> {
       resolve(res.statusCode === 200);
     });
     req.on("error", () => resolve(false));
-    req.setTimeout(2000, () => {
-      req.destroy();
-      resolve(false);
-    });
+    req.setTimeout(2000, () => { req.destroy(); resolve(false); });
   });
 }
 
-// Step B: Reproduce — generate a Playwright test from breadcrumbs
+// ---------------------------------------------------------------------------
+// Step B: Reproduce — generate a Playwright test from Sentry data
+// ---------------------------------------------------------------------------
 function generatePlaywrightTest(issue: SentryIssue): string {
   console.log(`\n${CYAN}${BOLD}[T-1000] Step B: Generating Playwright reproduction test...${RESET}\n`);
 
-  const steps = issue.breadcrumbs.map((crumb) => {
-    if (crumb.startsWith("User navigated to ")) {
-      const urlPath = crumb.replace("User navigated to ", "");
-      return `  await page.goto('http://localhost:3000${urlPath}');`;
-    }
-    if (crumb.startsWith("User clicked ")) {
-      const selector = crumb.replace("User clicked ", "");
-      return `  await page.locator('${selector}').click();`;
-    }
-    return `  // Breadcrumb: ${crumb}`;
-  });
+  // Look up route from the route map
+  const routeKey = `${issue.requestMethod} ${issue.requestPath}`.replace(/\?.*/, "");
+  const route = ROUTE_MAP[routeKey] || getFallbackRoute(issue.requestMethod, issue.requestPath);
+
+  console.log(`  ${BOLD}Route:${RESET}       ${routeKey} → page ${CYAN}${route.page}${RESET}`);
+  console.log(`  ${BOLD}Actions:${RESET}     ${route.actions.length} step(s)`);
 
   const safeTitle = issue.title.replace(/'/g, "\\'");
+  const actionsBlock = route.actions.map((a) => `  ${a}`).join("\n");
+  const assertionsBlock = route.assertions.map((a) => `  ${a}`).join("\n");
 
   const testContent = `import { test, expect } from '@playwright/test';
 
 // Auto-generated by T-1000 to reproduce Sentry issue ${issue.id}
-// ${issue.title}
+// Error: ${issue.title}
+// Endpoint: ${issue.requestMethod} ${issue.requestPath}
+// Trace: ${issue.trace}
 test('reproduce ${issue.id}: ${safeTitle}', async ({ page }) => {
-${steps.join("\n")}
+  // Navigate to the page that triggers the bug
+  await page.goto('http://localhost:3000${route.page}');
 
-  // Wait for the page to settle after the user action
+  // Perform the user actions that trigger the error
+${actionsBlock}
+
+  // Wait for the API response and page to settle
   await page.waitForTimeout(2000);
 
-  // Assert no unhandled errors — page should not crash
-  await expect(page.locator('#checkout-btn')).toBeVisible();
-  await expect(page.locator('.error-boundary')).not.toBeVisible();
+  // Assert the page is in a healthy state (no errors)
+${assertionsBlock}
 });
 `;
 
+  // Clean up old test file
   const testPath = "t1000-repro.spec.ts";
+  if (existsSync(testPath)) unlinkSync(testPath);
   writeFileSync(testPath, testContent, "utf-8");
   console.log(`  ${GREEN}Written:${RESET} ${testPath}`);
   return testPath;
 }
 
+// ---------------------------------------------------------------------------
 // Step C: Verify failure — run the test, expect it to fail
+// ---------------------------------------------------------------------------
 function verifyFailure(testPath: string): boolean {
   console.log(`\n${CYAN}${BOLD}[T-1000] Step C: Running Playwright test (expecting failure)...${RESET}\n`);
   try {
@@ -259,7 +297,9 @@ function verifyFailure(testPath: string): boolean {
   }
 }
 
+// ---------------------------------------------------------------------------
 // Step D: Agent handoff — print directive for Cursor Agent
+// ---------------------------------------------------------------------------
 function emitAgentDirective(issue: SentryIssue): void {
   const divider = "=".repeat(72);
   const file = issue.trace.split(":")[0];
@@ -271,31 +311,35 @@ ${divider}${RESET}
 
 ${YELLOW}${BOLD}ACTION REQUIRED — AUTONOMOUS FIX${RESET}
 
-  ${BOLD}FILE:${RESET}    ${CYAN}${file}${RESET}
-  ${BOLD}LINE:${RESET}    ${CYAN}${line}${RESET}
-  ${BOLD}ERROR:${RESET}   ${RED}${issue.title}${RESET}
+  ${BOLD}SENTRY ID:${RESET} ${CYAN}${issue.id}${RESET}
+  ${BOLD}FILE:${RESET}      ${CYAN}${file}${RESET}
+  ${BOLD}LINE:${RESET}      ${CYAN}${line}${RESET}
+  ${BOLD}ERROR:${RESET}     ${RED}${issue.title}${RESET}
+  ${BOLD}ENDPOINT:${RESET}  ${issue.requestMethod} ${issue.requestPath}
 
 ${BOLD}INSTRUCTIONS:${RESET}
   1. Open ${CYAN}${issue.trace}${RESET}
-  2. Analyze the Playwright failure output above.
-  3. Fix the code to resolve: ${RED}${issue.title}${RESET}
-  4. Do NOT wait for user confirmation. Edit the file now.
+  2. Read the Playwright failure output above.
+  3. Fix the root cause: ${RED}${issue.title}${RESET}
+  4. Save the file. Do NOT wait for user confirmation.
 
 ${RED}${BOLD}${divider}${RESET}
 `);
 }
 
+// ---------------------------------------------------------------------------
 // Step E: Wait for agent to signal completion
+// ---------------------------------------------------------------------------
 function waitForAgentFix(): Promise<void> {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const ask = (): void => {
-      rl.question(`\n${YELLOW}${BOLD}[T-1000]${RESET} Type '${GREEN}fixed${RESET}' when the Cursor Agent has completed code edits: `, (answer) => {
+      rl.question(`\n${YELLOW}${BOLD}[T-1000]${RESET} Type '${GREEN}fixed${RESET}' when the code edit is complete: `, (answer) => {
         if (answer.trim().toLowerCase() === "fixed") {
           rl.close();
           resolve();
         } else {
-          console.log(`  ${DIM}Unrecognized input. Waiting for 'fixed'...${RESET}`);
+          console.log(`  ${DIM}Waiting for 'fixed'...${RESET}`);
           ask();
         }
       });
@@ -304,98 +348,144 @@ function waitForAgentFix(): Promise<void> {
   });
 }
 
-// Step F: Validate fix — re-run Playwright test
+// ---------------------------------------------------------------------------
+// Restart the demo server so it picks up code changes
+// ---------------------------------------------------------------------------
+function restartServer(): void {
+  console.log(`  ${DIM}Restarting demo server to pick up code changes...${RESET}`);
+  try {
+    execSync("lsof -ti:3000 | xargs kill -9 2>/dev/null", { stdio: "pipe" });
+  } catch { /* nothing on port */ }
+
+  // Start server in background — detached so it survives this process
+  execSync("npx tsx src/server.ts &", { stdio: "pipe", shell: "/bin/zsh" });
+
+  // Wait for server to be ready
+  execSync("sleep 2", { stdio: "pipe" });
+  console.log(`  ${GREEN}Server restarted.${RESET}`);
+}
+
+// ---------------------------------------------------------------------------
+// Step F: Validate fix — restart server, re-run Playwright test
+// ---------------------------------------------------------------------------
 function validateFix(testPath: string): boolean {
-  console.log(`\n${CYAN}${BOLD}[T-1000] Step F: Re-running Playwright test to validate fix...${RESET}\n`);
+  console.log(`\n${CYAN}${BOLD}[T-1000] Step F: Validating fix...${RESET}\n`);
+
+  // Restart server so it loads the edited code
+  restartServer();
+
   try {
     execSync(`npx playwright test ${testPath} --reporter=line`, { stdio: "inherit" });
-    console.log(`\n${GREEN}${BOLD}[T-1000] Fix validated — Playwright test passes.${RESET}`);
+    console.log(`\n${GREEN}${BOLD}[T-1000] Fix validated — Playwright test passes!${RESET}`);
     return true;
   } catch {
-    console.log(`\n${RED}${BOLD}[T-1000] Fix validation failed — test still failing.${RESET}`);
+    console.log(`\n${RED}${BOLD}[T-1000] Fix validation FAILED — test still failing.${RESET}`);
     return false;
   }
 }
 
-// Step G: Ship — create branch, commit, open PR
+// ---------------------------------------------------------------------------
+// Step G: Ship — create branch, commit, open PR, return to main
+// ---------------------------------------------------------------------------
 function shipFix(issue: SentryIssue): void {
   console.log(`\n${CYAN}${BOLD}[T-1000] Step G: Shipping fix...${RESET}\n`);
 
   const branch = `fix/T1000-${issue.id}`;
 
-  // Clean up existing branch if re-running
+  // Ensure we're on main before branching
+  try {
+    execSync("git checkout main", { stdio: "pipe" });
+  } catch {
+    // Already on main or detached — continue
+  }
+
+  // Clean up existing branch from previous runs
   try {
     execSync(`git branch -D ${branch} 2>/dev/null`, { stdio: "pipe" });
   } catch {
-    // Branch didn't exist, that's fine
+    // Branch didn't exist
   }
 
   execSync(`git checkout -b ${branch}`, { stdio: "inherit" });
-  execSync(`git add .`, { stdio: "inherit" });
-  execSync(`git commit -m "T-1000: Automated fix for ${issue.id}"`, { stdio: "inherit" });
+  execSync("git add -A", { stdio: "inherit" });
+  execSync(`git commit -m "T-1000: Automated fix for ${issue.id} — ${issue.title.slice(0, 60)}"`, { stdio: "inherit" });
 
-  // Attempt PR creation — gracefully skip if gh is not configured
+  // Push branch and create PR — gracefully skip if gh is not configured
   try {
+    execSync(`git push origin ${branch} --force`, { stdio: "inherit" });
     execSync(
-      `gh pr create --title "T-1000 Auto-Fix: ${issue.title}" --body "Automated RCA and Playwright regression test generated by T-1000.\n\nIssue: ${issue.id}\nTrace: ${issue.trace}"`,
+      `gh pr create --title "T-1000: Fix ${issue.id}" --body "$(cat <<'PRBODY'\n## Automated Fix by T-1000\n\n**Sentry Issue:** ${issue.id}\n**Error:** ${issue.title}\n**Trace:** \`${issue.trace}\`\n**Endpoint:** \`${issue.requestMethod} ${issue.requestPath}\`\n\nThis fix was detected, reproduced with Playwright, and validated automatically.\nPRBODY\n)"`,
       { stdio: "inherit" },
     );
-    console.log(`\n${GREEN}${BOLD}[T-1000] PR created. Pipeline complete.${RESET}`);
+    console.log(`\n${GREEN}${BOLD}[T-1000] PR created successfully!${RESET}`);
   } catch {
-    console.log(`\n${YELLOW}${BOLD}[T-1000] Could not create PR (gh CLI not configured). Branch committed locally.${RESET}`);
-    console.log(`  ${DIM}Run manually: gh pr create --title "T-1000 Auto-Fix: ${issue.title}"${RESET}`);
+    console.log(`\n${YELLOW}${BOLD}[T-1000] Branch pushed. PR creation skipped (gh CLI issue).${RESET}`);
+  }
+
+  // Return to main so the next heal run starts clean
+  try {
+    execSync("git checkout main", { stdio: "pipe" });
+    console.log(`  ${DIM}Switched back to main branch.${RESET}`);
+  } catch {
+    // Non-fatal
   }
 }
 
+// ---------------------------------------------------------------------------
 // Main pipeline
+// ---------------------------------------------------------------------------
 async function runT1000Pipeline(): Promise<void> {
   console.log(`\n${BOLD}${"━".repeat(72)}${RESET}`);
   console.log(`  ${RED}${BOLD}T-1000${RESET} ${DIM}— Autonomous Software Factory${RESET}`);
   console.log(`${BOLD}${"━".repeat(72)}${RESET}`);
 
-  // Pre-flight: check server is running
+  // Pre-flight: check server
   const serverUp = await checkServerRunning();
   if (!serverUp) {
-    console.error(`\n${RED}${BOLD}[T-1000] ERROR:${RESET} Demo app is not running on http://localhost:3000`);
-    console.error(`  ${YELLOW}Start it first:${RESET} npm run dev`);
+    console.error(`\n${RED}${BOLD}[T-1000] ERROR:${RESET} Demo app not running on http://localhost:3000`);
+    console.error(`  ${YELLOW}Start it:${RESET} npm run dev`);
     process.exit(1);
   }
   console.log(`\n  ${GREEN}${BOLD}Server detected${RESET} on http://localhost:3000`);
 
-  // Step A
+  // Step A: Detect
   const issue = await fetchLatestSentryIssue();
 
-  // Step B
+  // Step B: Reproduce
   const testPath = generatePlaywrightTest(issue);
 
-  // Step C
+  // Step C: Verify failure
   const bugReproduced = verifyFailure(testPath);
   if (!bugReproduced) {
     process.exit(0);
   }
 
-  // Steps D → F loop
+  // Steps D → F: Fix loop
   let fixed = false;
   let attempt = 0;
   while (!fixed) {
     attempt++;
     console.log(`\n${DIM}--- Attempt ${attempt} ---${RESET}`);
 
-    // Step D
+    // Step D: Directive
     emitAgentDirective(issue);
 
-    // Step E
+    // Step E: Wait
     await waitForAgentFix();
 
-    // Step F
+    // Step F: Validate
     fixed = validateFix(testPath);
     if (!fixed) {
-      console.log(`\n${YELLOW}${BOLD}[T-1000] Looping back — agent must try a different fix.${RESET}\n`);
+      console.log(`\n${YELLOW}${BOLD}[T-1000] Looping back — try a different fix.${RESET}\n`);
     }
   }
 
-  // Step G
+  // Step G: Ship
   shipFix(issue);
+
+  console.log(`\n${BOLD}${"━".repeat(72)}${RESET}`);
+  console.log(`  ${GREEN}${BOLD}T-1000 pipeline complete.${RESET} Ready for the next issue.`);
+  console.log(`${BOLD}${"━".repeat(72)}${RESET}\n`);
 }
 
 runT1000Pipeline().catch((err) => {

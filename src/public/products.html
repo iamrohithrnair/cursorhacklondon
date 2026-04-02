@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>T-1000 Demo Store — Products</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 40px;
+      max-width: 520px;
+      width: 100%;
+    }
+    h1 { font-size: 1.8rem; margin-bottom: 8px; color: #fff; text-align: center; }
+    .subtitle { color: #888; margin-bottom: 24px; font-size: 0.9rem; text-align: center; }
+    .nav { text-align: center; margin-bottom: 24px; }
+    .nav a { color: #4ecdc4; text-decoration: none; font-size: 0.9rem; }
+    .nav a:hover { text-decoration: underline; }
+    .search-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+    #search-input {
+      flex: 1;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      color: #e0e0e0;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 1rem;
+      outline: none;
+    }
+    #search-input:focus { border-color: #4ecdc4; }
+    #search-btn {
+      background: #4ecdc4;
+      color: #0a0a0a;
+      border: none;
+      padding: 12px 24px;
+      font-size: 1rem;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #search-btn:hover { background: #3dbdb5; }
+    .search-results {
+      display: none;
+      border-top: 1px solid #333;
+      padding-top: 16px;
+    }
+    .product-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #222;
+    }
+    .product-item .name { color: #ccc; }
+    .product-item .meta { text-align: right; }
+    .product-item .price { color: #4ecdc4; font-weight: 600; }
+    .product-item .category { color: #666; font-size: 0.8rem; }
+    .product-item .stock { font-size: 0.75rem; }
+    .stock.in { color: #4ecdc4; }
+    .stock.out { color: #e94560; }
+    .result-count { color: #888; font-size: 0.85rem; margin-bottom: 12px; }
+    .error-boundary {
+      display: none;
+      background: #2d1320;
+      border: 1px solid #e94560;
+      color: #ff6b6b;
+      padding: 16px;
+      border-radius: 8px;
+      margin-top: 16px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      text-align: left;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Product Search</h1>
+    <p class="subtitle">T-1000 Demo Store</p>
+    <div class="nav"><a href="/">← Back to Checkout</a></div>
+
+    <div class="search-bar">
+      <input id="search-input" type="text" placeholder="Search products..." value="peripherals">
+      <button id="search-btn">Search</button>
+    </div>
+
+    <div class="search-results" id="search-results"></div>
+    <div class="error-boundary"></div>
+  </div>
+
+  <script>
+    async function doSearch() {
+      const query = document.getElementById('search-input').value;
+      const resultsDiv = document.getElementById('search-results');
+      const errorDiv = document.querySelector('.error-boundary');
+      errorDiv.style.display = 'none';
+      resultsDiv.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/search?q=' + encodeURIComponent(query));
+        const data = await res.json();
+
+        if (!res.ok) {
+          errorDiv.textContent = data.error || 'Something went wrong';
+          errorDiv.style.display = 'block';
+          return;
+        }
+
+        let html = '<p class="result-count">' + data.total + ' result(s)</p>';
+        for (const p of data.results) {
+          html += '<div class="product-item">' +
+            '<span class="name">' + p.name + '</span>' +
+            '<span class="meta">' +
+              '<span class="price">$' + p.price.toFixed(2) + '</span><br>' +
+              '<span class="category">' + p.category + '</span><br>' +
+              '<span class="stock ' + (p.inStock ? 'in' : 'out') + '">' +
+                (p.inStock ? 'In Stock' : 'Out of Stock') +
+              '</span>' +
+            '</span>' +
+          '</div>';
+        }
+        resultsDiv.innerHTML = html;
+        resultsDiv.style.display = 'block';
+      } catch (err) {
+        errorDiv.textContent = err.message;
+        errorDiv.style.display = 'block';
+      }
+    }
+
+    document.getElementById('search-btn').addEventListener('click', doSearch);
+    document.getElementById('search-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doSearch();
+    });
+  </script>
+</body>
+</html>
