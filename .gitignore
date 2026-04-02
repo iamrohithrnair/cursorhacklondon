@@ -1,0 +1,7 @@
+node_modules/
+dist/
+t1000-repro.spec.ts
+test-results/
+playwright-report/
+.DS_Store
+*.tsbuildinfo

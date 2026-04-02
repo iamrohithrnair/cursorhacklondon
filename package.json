@@ -1,0 +1,19 @@
+{
+  "name": "t-1000",
+  "version": "1.0.0",
+  "description": "Autonomous Software Factory for Cursor IDE",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "npx tsx src/server.ts",
+    "heal": "npx tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "setup": "npm install && npx playwright install chromium"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.11.0",
+    "@playwright/test": "^1.42.0",
+    "tsx": "^4.7.0"
+  }
+}
