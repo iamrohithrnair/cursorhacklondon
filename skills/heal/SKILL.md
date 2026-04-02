@@ -1,3 +1,8 @@
+---
+name: heal
+description: Detects production errors via Sentry, reproduces them with Playwright, fixes the code, and opens a GitHub PR. Invoke with /heal.
+---
+
 # T-1000 Heal Skill
 
 ## Trigger

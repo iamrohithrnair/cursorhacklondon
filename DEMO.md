@@ -1,132 +1,257 @@
-# T-1000 Demo Script
+# T-1000 Demo: Complete Step-by-Step Guide
 
-## Prerequisites (do once before the demo)
+## Phase 0: Pre-Demo Setup (Do Once)
 
 ```bash
+# 1. Install dependencies
 npm install
+
+# 2. Install Playwright browser
 npx playwright install chromium
-```
 
-Ensure `.env` has your Sentry credentials:
-```
-SENTRY_AUTH_TOKEN=<your-token>
-SENTRY_ORG=raw-angel
-SENTRY_PROJECT=my-node-app
-```
+# 3. Verify .env has Sentry credentials (already configured)
+cat .env
+# Should show:
+# SENTRY_AUTH_TOKEN=sntryu_...
+# SENTRY_ORG=raw-angel
+# SENTRY_PROJECT=my-node-app
 
-Ensure the checkout bug exists in `src/components/Checkout.tsx` line 40:
-```ts
-const discountMultiplier = (100 - cart.discount.percentage) / 100;
-```
+# 4. Ensure the bug exists in Checkout.tsx line 40
+# Should be: const discountMultiplier = (100 - cart.discount.percentage) / 100;
+# If previously fixed, reset:
+npm run reset
 
-If you previously fixed it, run `npm run reset` to restore it.
+# 5. Authenticate GitHub CLI (for PR creation)
+gh auth status
+# If not logged in: gh auth login
+```
 
 ---
 
-## Part 1: Fix a Production Bug (5 min)
-
-### 1. Start the demo app
+## Phase 1: Load the Plugin in Cursor
 
 ```bash
-npm run dev
+# 1. Create the local plugins directory (if not exists)
+mkdir -p ~/.cursor/plugins/local
+
+# 2. Symlink your plugin to Cursor's plugins folder
+ln -sf "$(pwd)" ~/.cursor/plugins/local/t-1000
+
+# 3. Verify the symlink
+ls -la ~/.cursor/plugins/local/
 ```
 
-Open http://localhost:3000 in a browser. Show the audience the store UI.
+**In Cursor IDE:**
+1. Press `Cmd+Shift+P` (macOS) or `Ctrl+Shift+P` (Windows/Linux)
+2. Type **"Developer: Reload Window"** and press Enter
+3. Wait for Cursor to reload
 
-### 2. Trigger the bug
+**Verify plugin loaded:**
+- Open Cursor Chat
+- Type `/` — you should see `heal` in the autocomplete list
 
-Click the **Checkout** button. A red error appears:
-> Cannot read properties of undefined (reading 'percentage')
+---
 
-This error has been captured by Sentry. You can show it in the Sentry dashboard if you want.
+## Phase 2: Trigger a Bug in Sentry
 
-### 3. Run the T-1000 pipeline
-
-In a second terminal (or Cursor terminal):
-
+**Terminal 1: Start the demo app**
 ```bash
+npm run dev
+# Output: T-1000 Demo App running on http://localhost:3000
+```
+
+**In Browser:**
+1. Open http://localhost:3000
+2. Click the **"Checkout"** button
+3. You'll see a red error: `Cannot read properties of undefined (reading 'percentage')`
+
+**Wait 5-10 seconds** for Sentry to ingest the error.
+
+---
+
+## Phase 3: Run the T-1000 Pipeline
+
+**Option A: Using Cursor Chat (Plugin Way)**
+1. Open Cursor Chat panel
+2. Type `/heal` and press Enter
+3. The skill instructions tell the agent to run `npx tsx src/index.ts`
+
+**Option B: Using Terminal Directly**
+```bash
+# Terminal 2
 npm run heal
 ```
 
-Walk the audience through what happens on screen:
+---
 
-- **Step A** — T-1000 queries Sentry API, finds the unresolved TypeError
-- **Step B** — Generates a Playwright test from the error's endpoint and route map
-- **Step C** — Runs the test. It fails — the bug is reproduced locally
-- **Step D** — Emits a directive: file, line number, error, instructions
+## Phase 4: Watch the Pipeline Execute
 
-### 4. Fix the bug
+The terminal will show:
 
-Open `src/components/Checkout.tsx` line 40. Change:
-
-```ts
-const discountMultiplier = (100 - cart.discount.percentage) / 100;
 ```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  T-1000 — Autonomous Software Factory
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-To:
+  Server detected on http://localhost:3000
 
-```ts
-const discountMultiplier = cart.discount ? (100 - cart.discount.percentage) / 100 : 1;
+[T-1000] Step A: Querying Sentry for latest unresolved issue...
+  Issue:       MY-NODE-APP-XX — TypeError: Cannot read properties of undefined (reading 'percentage')
+  Culprit:     POST /api/checkout
+  Trace:       src/components/Checkout.tsx:40
+
+[T-1000] Step B: Generating Playwright reproduction test...
+  Route:       POST /api/checkout → page /
+  Written: t1000-repro.spec.ts
+
+[T-1000] Step C: Running Playwright test (expecting failure)...
+  ✘ Test failed as expected — bug reproduced successfully.
+
+========================================================================
+[T-1000 AGENT DIRECTIVE]
+========================================================================
+
+ACTION REQUIRED — AUTONOMOUS FIX
+
+  SENTRY ID: MY-NODE-APP-XX
+  FILE:      src/components/Checkout.tsx
+  LINE:      40
+  ERROR:     TypeError: Cannot read properties of undefined (reading 'percentage')
+  ENDPOINT:  POST /api/checkout
+
+INSTRUCTIONS:
+  1. Open src/components/Checkout.tsx:40
+  2. Read the Playwright failure output above.
+  3. Fix the root cause: TypeError: Cannot read...
+  4. Save the file. Do NOT wait for user confirmation.
+
+========================================================================
+
+[T-1000] Type 'fixed' when the code edit is complete:
 ```
-
-Save the file.
-
-### 5. Signal completion
-
-Type `fixed` in the pipeline terminal.
-
-### 6. Watch the magic
-
-- **Step F** — T-1000 restarts the server, re-runs the Playwright test — it passes
-- **Step G** — Creates a git branch, commits, pushes, opens a GitHub PR
-- Returns to `main` branch automatically
-
-### 7. Show the result
-
-- Refresh the browser, click Checkout — it works now (shows order confirmation)
-- Show the PR on GitHub
 
 ---
 
-## Part 2: Introduce a New Bug Live (5 min)
+## Phase 5: Fix the Bug
+
+**Open** `src/components/Checkout.tsx` **line 40**
+
+**Change this:**
+```typescript
+const discountMultiplier = (100 - cart.discount.percentage) / 100;
+```
+
+**To this:**
+```typescript
+const discountMultiplier = cart.discount ? (100 - cart.discount.percentage) / 100 : 1;
+```
+
+**Save the file** (`Cmd+S`)
+
+---
+
+## Phase 6: Signal Completion
+
+In the pipeline terminal, type:
+```
+fixed
+```
+
+Press Enter.
+
+---
+
+## Phase 7: Watch Validation & PR Creation
+
+```
+[T-1000] Step F: Validating fix...
+  Restarting demo server to pick up code changes...
+  Server restarted.
+
+Running Playwright test t1000-repro.spec.ts...
+  ✓ reproduce MY-NODE-APP-XX: TypeError...
+
+[T-1000] Fix validated — Playwright test passes!
+
+[T-1000] Step G: Shipping fix...
+  Switched to branch 'fix/T1000-MY-NODE-APP-XX'
+  [fix/T1000-MY-NODE-APP-XX abc1234] T-1000: Automated fix for MY-NODE-APP-XX
+  
+Creating pull request...
+  https://github.com/your-org/cursorhacklondon/pull/1
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  T-1000 pipeline complete. Ready for the next issue.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
+## Phase 8: Verify the Fix
+
+1. **Refresh browser** at http://localhost:3000
+2. Click **"Checkout"** — it now works (shows order confirmation)
+3. **Show the GitHub PR** in browser
+
+---
+
+## Quick Reference: All Commands
+
+| Step | Command |
+|------|---------|
+| Install deps | `npm install && npx playwright install chromium` |
+| Start demo app | `npm run dev` |
+| Run pipeline | `npm run heal` |
+| Reset to buggy state | `npm run reset` |
+| Symlink plugin | `ln -sf "$(pwd)" ~/.cursor/plugins/local/t-1000` |
+| Reload Cursor | `Cmd+Shift+P` → "Developer: Reload Window" |
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `/heal` not showing in Cursor | Verify symlink exists, reload Cursor window |
+| "Server not running" | Run `npm run dev` first |
+| "No unresolved issues" | Trigger bug in browser, wait 5-10s for Sentry |
+| Test passes (bug not reproduced) | Restart server: `Ctrl+C` then `npm run dev` |
+| `gh pr create` fails | Install/auth GitHub CLI: `gh auth login` |
+| Need to demo again | Run `npm run reset` to restore the bug |
+
+---
+
+## Bonus: Demo a Second Bug Live
 
 ### 1. Reset to main
-
 The pipeline already returned to main. If not:
-
 ```bash
 git checkout main
 ```
 
 ### 2. Show the working products page
-
 Navigate to http://localhost:3000/products in the browser. Search for "peripherals" — results appear correctly.
 
 ### 3. Break it live
-
 Open `src/components/Search.ts`. Change line 22 from:
-
-```ts
+```typescript
 (p) => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q)
 ```
 
 To something like:
-
-```ts
+```typescript
 (p) => p.details.name.toLowerCase().includes(q)
 ```
 
 Save the file. Restart the server (`Ctrl+C` then `npm run dev`).
 
 ### 4. Trigger the new bug
-
 Go to http://localhost:3000/products and click **Search**. A red error appears:
 > Cannot read properties of undefined (reading 'name')
 
 Wait ~5 seconds for Sentry to ingest the event.
 
 ### 5. Run T-1000 again
-
 ```bash
 npm run heal
 ```
@@ -138,32 +263,17 @@ The audience sees T-1000:
 - Emits directive pointing to `Search.ts`
 
 ### 6. Fix it
-
 The Cursor agent (or you manually) fixes `Search.ts`. Type `fixed`.
 
 ### 7. PR #2 created
-
 T-1000 validates the fix, creates a second branch and PR.
 
 ---
 
-## Talking Points
+## Talking Points for Judges
 
 - **"Zero human triage"** — T-1000 pulls the error directly from Sentry. No one had to read the stack trace, file a ticket, or assign the bug.
 - **"Playwright as proof"** — The bug isn't just detected, it's reproduced with an actual E2E test. The same test validates the fix. This test ships as a regression test with the PR.
 - **"Any endpoint, any bug"** — The route map makes test generation generic. New routes can be added in seconds.
 - **"Loop until fixed"** — If the first fix attempt fails validation, T-1000 loops back and asks for another attempt. It doesn't ship broken code.
 - **"Back to main"** — After shipping a PR, the pipeline returns to main so you can immediately heal the next issue.
-
----
-
-## If Something Goes Wrong
-
-| Problem | Fix |
-|---------|-----|
-| `npm run heal` says server not running | Run `npm run dev` in another terminal first |
-| Sentry returns no issues | Trigger the bug in the browser first, wait 5-10s |
-| Playwright test passes (bug not reproduced) | Restart the server: `Ctrl+C` then `npm run dev` |
-| Git branch already exists | Pipeline handles this automatically (deletes old branch) |
-| `gh pr create` fails | PR creation is optional — the fix is still committed locally |
-| Need to re-demo from scratch | Run `npm run reset` then `npm run dev` |

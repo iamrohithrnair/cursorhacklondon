@@ -1,13 +1,12 @@
 {
   "name": "t-1000",
+  "displayName": "T-1000",
   "version": "1.0.0",
   "description": "Autonomous Software Factory — intercepts Sentry errors, reproduces with Playwright, fixes code, ships PRs.",
-  "skills": [
-    {
-      "name": "heal",
-      "description": "Detects production errors via Sentry, reproduces them with Playwright, fixes the code, and opens a GitHub PR.",
-      "command": "npx tsx src/index.ts",
-      "instructionFile": "skills/heal/SKILL.md"
-    }
-  ]
+  "author": {
+    "name": "Hackathon Team",
+    "email": "team@example.com"
+  },
+  "license": "MIT",
+  "keywords": ["cursor", "plugin", "sentry", "playwright", "automation", "self-healing"]
 }
