@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "description": "Autonomous Software Factory — intercepts Sentry errors, reproduces with Playwright, fixes code, ships PRs.",
   "author": {
-    "name": "Hackathon Team",
-    "email": "team@example.com"
+    "name": "Rohith Raghunathan Nair",
+    "email": "iamrohithrnair@gmail.com"
   },
   "license": "MIT",
   "keywords": ["cursor", "plugin", "sentry", "playwright", "automation", "self-healing"]
