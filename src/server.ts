@@ -7,7 +7,7 @@ import path from "path";
 import { processCheckout } from "./components/Checkout";
 import { searchProducts } from "./components/Search";
 
-const PORT = 3000;
+const PORT = 3001;
 
 function serveHtml(res: http.ServerResponse, filename: string): void {
   const htmlPath = path.join(__dirname, "../src/public", filename);

@@ -227,7 +227,7 @@ async function fetchLatestSentryIssue(): Promise<SentryIssue> {
 // ---------------------------------------------------------------------------
 function checkServerRunning(): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = http.get("http://localhost:3000", (res) => {
+    const req = http.get("http://localhost:3001", (res) => {
       res.resume();
       resolve(res.statusCode === 200);
     });
@@ -261,7 +261,7 @@ function generatePlaywrightTest(issue: SentryIssue): string {
 // Trace: ${issue.trace}
 test('reproduce ${issue.id}: ${safeTitle}', async ({ page }) => {
   // Navigate to the page that triggers the bug
-  await page.goto('http://localhost:3000${route.page}');
+  await page.goto('http://localhost:3001${route.page}');
 
   // Perform the user actions that trigger the error
 ${actionsBlock}
@@ -442,11 +442,11 @@ async function runT1000Pipeline(): Promise<void> {
   // Pre-flight: check server
   const serverUp = await checkServerRunning();
   if (!serverUp) {
-    console.error(`\n${RED}${BOLD}[T-1000] ERROR:${RESET} Demo app not running on http://localhost:3000`);
+    console.error(`\n${RED}${BOLD}[T-1000] ERROR:${RESET} Demo app not running on http://localhost:3001`);
     console.error(`  ${YELLOW}Start it:${RESET} npm run dev`);
     process.exit(1);
   }
-  console.log(`\n  ${GREEN}${BOLD}Server detected${RESET} on http://localhost:3000`);
+  console.log(`\n  ${GREEN}${BOLD}Server detected${RESET} on http://localhost:3001`);
 
   // Step A: Detect
   const issue = await fetchLatestSentryIssue();
