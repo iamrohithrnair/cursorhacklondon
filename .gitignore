@@ -5,6 +5,7 @@ test-results/
 playwright-report/
 .DS_Store
 *.tsbuildinfo
+.env
 .agents/
 .claude/
 .kilocode/

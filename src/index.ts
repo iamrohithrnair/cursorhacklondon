@@ -1,7 +1,26 @@
 import { execSync } from "child_process";
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, existsSync } from "fs";
 import { createInterface } from "readline";
 import http from "http";
+import https from "https";
+import path from "path";
+
+// Load .env file
+function loadEnv(): void {
+  const envPath = path.join(__dirname, "../.env");
+  if (!existsSync(envPath)) return;
+  const lines = readFileSync(envPath, "utf-8").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx);
+    const val = trimmed.slice(eqIdx + 1);
+    if (!process.env[key]) process.env[key] = val;
+  }
+}
+loadEnv();
 
 // ANSI color helpers
 const BOLD = "\x1b[1m";
@@ -19,22 +38,157 @@ interface SentryIssue {
   trace: string;
 }
 
-// Step A: Detect — fetch latest Sentry issue (mock)
-function fetchLatestSentryIssue(): SentryIssue {
-  console.log(`\n${CYAN}${BOLD}[T-1000] Step A: Detecting production error...${RESET}\n`);
-  const issue: SentryIssue = {
-    id: "ISSUE-404",
-    title: "TypeError: Cannot read properties of undefined (reading 'percentage')",
-    breadcrumbs: [
-      "User navigated to /",
-      "User clicked #checkout-btn",
-    ],
-    trace: "src/components/Checkout.tsx:40",
-  };
-  console.log(`  ${BOLD}Issue:${RESET}       ${issue.id} — ${RED}${issue.title}${RESET}`);
-  console.log(`  ${BOLD}Trace:${RESET}       ${issue.trace}`);
-  console.log(`  ${BOLD}Breadcrumbs:${RESET} ${issue.breadcrumbs.join(` ${DIM}→${RESET} `)}`);
-  return issue;
+// Sentry API helper
+function sentryApiGet(endpoint: string): Promise<string> {
+  const token = process.env.SENTRY_AUTH_TOKEN;
+  if (!token) throw new Error("SENTRY_AUTH_TOKEN not set in .env");
+  const org = process.env.SENTRY_ORG;
+  if (!org) throw new Error("SENTRY_ORG not set in .env");
+
+  const url = `https://sentry.io/api/0/organizations/${org}/${endpoint}`;
+
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { Authorization: `Bearer ${token}` } }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`Sentry API ${res.statusCode}: ${data}`));
+        } else {
+          resolve(data);
+        }
+      });
+    }).on("error", reject);
+  });
+}
+
+function sentryProjectApiGet(endpoint: string): Promise<string> {
+  const token = process.env.SENTRY_AUTH_TOKEN;
+  if (!token) throw new Error("SENTRY_AUTH_TOKEN not set in .env");
+  const org = process.env.SENTRY_ORG;
+  const project = process.env.SENTRY_PROJECT;
+  if (!org || !project) throw new Error("SENTRY_ORG or SENTRY_PROJECT not set in .env");
+
+  const url = `https://sentry.io/api/0/projects/${org}/${project}/${endpoint}`;
+
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { Authorization: `Bearer ${token}` } }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`Sentry API ${res.statusCode}: ${data}`));
+        } else {
+          resolve(data);
+        }
+      });
+    }).on("error", reject);
+  });
+}
+
+// Step A: Detect — fetch latest unresolved Sentry issue
+async function fetchLatestSentryIssue(): Promise<SentryIssue> {
+  console.log(`\n${CYAN}${BOLD}[T-1000] Step A: Querying Sentry for latest unresolved issue...${RESET}\n`);
+
+  // Fetch latest unresolved issue
+  const issuesRaw = await sentryProjectApiGet("issues/?query=is:unresolved&sort=date&limit=1");
+  const issues = JSON.parse(issuesRaw);
+
+  if (!issues.length) {
+    console.log(`  ${GREEN}No unresolved issues found in Sentry. Nothing to fix.${RESET}`);
+    process.exit(0);
+  }
+
+  const issue = issues[0];
+  const issueId = issue.shortId || issue.id;
+  const title = issue.title;
+
+  console.log(`  ${BOLD}Issue:${RESET}       ${issueId} — ${RED}${title}${RESET}`);
+  console.log(`  ${BOLD}Level:${RESET}       ${issue.level}`);
+  console.log(`  ${BOLD}First seen:${RESET}  ${issue.firstSeen}`);
+  console.log(`  ${BOLD}Events:${RESET}      ${issue.count}`);
+
+  // Fetch latest event for stack trace and breadcrumbs
+  console.log(`\n  ${DIM}Fetching event details...${RESET}`);
+  const eventRaw = await sentryApiGet(`issues/${issue.id}/events/latest/`);
+  const event = JSON.parse(eventRaw);
+
+  // Extract in-app stack trace (deepest in-app frame = root cause)
+  let trace = "";
+  const cwd = process.cwd();
+  for (const entry of event.entries || []) {
+    if (entry.type === "exception") {
+      for (const val of entry.data.values) {
+        const frames = val.stacktrace?.frames || [];
+        // Find the deepest in-app frame (last in array = top of stack)
+        for (let i = frames.length - 1; i >= 0; i--) {
+          const frame = frames[i];
+          if (frame.inApp && frame.filename) {
+            // Convert absolute path to relative
+            let filePath = frame.filename;
+            if (filePath.startsWith(cwd)) {
+              filePath = filePath.slice(cwd.length + 1);
+            }
+            trace = `${filePath}:${frame.lineNo}`;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Extract breadcrumbs
+  const breadcrumbs: string[] = [];
+  for (const entry of event.entries || []) {
+    if (entry.type === "breadcrumbs") {
+      for (const bc of entry.data.values) {
+        const cat = bc.category || "unknown";
+        const msg = bc.message || "";
+        if (cat === "http" && bc.data) {
+          breadcrumbs.push(`HTTP ${bc.data.method || "GET"} ${bc.data.url || ""} → ${bc.data.status_code || "?"}`);
+        } else if (cat === "navigation" && bc.data) {
+          breadcrumbs.push(`User navigated to ${bc.data.to || bc.data.from || "/"}`);
+        } else if (cat === "ui.click") {
+          breadcrumbs.push(`User clicked ${msg}`);
+        } else if (msg) {
+          breadcrumbs.push(`[${cat}] ${msg}`);
+        }
+      }
+    }
+  }
+
+  // Infer user-facing breadcrumbs from request context
+  // API endpoints aren't user-navigable, so map them to the page + action that triggered them
+  if (!breadcrumbs.some((b) => b.startsWith("User navigated") || b.startsWith("User clicked"))) {
+    let requestPath = "";
+    for (const entry of event.entries || []) {
+      if (entry.type === "request" && entry.data?.url) {
+        try { requestPath = new URL(entry.data.url).pathname; } catch { /* ignore */ }
+      }
+    }
+    const culprit = issue.culprit || "";
+
+    if (requestPath.includes("/api/checkout") || culprit.includes("/api/checkout")) {
+      breadcrumbs.length = 0;
+      breadcrumbs.push("User navigated to /");
+      breadcrumbs.push("User clicked #checkout-btn");
+    } else if (requestPath && !requestPath.startsWith("/api/")) {
+      breadcrumbs.unshift(`User navigated to ${requestPath}`);
+    } else {
+      breadcrumbs.length = 0;
+      breadcrumbs.push("User navigated to /");
+    }
+  }
+
+  if (!trace) {
+    console.error(`  ${RED}Could not extract stack trace from Sentry event.${RESET}`);
+    process.exit(1);
+  }
+
+  console.log(`  ${BOLD}Trace:${RESET}       ${CYAN}${trace}${RESET}`);
+  console.log(`  ${BOLD}Breadcrumbs:${RESET} ${breadcrumbs.join(` ${DIM}→${RESET} `)}`);
+
+  return { id: issueId, title, breadcrumbs, trace };
 }
 
 // Check if demo server is running
@@ -58,21 +212,23 @@ function generatePlaywrightTest(issue: SentryIssue): string {
 
   const steps = issue.breadcrumbs.map((crumb) => {
     if (crumb.startsWith("User navigated to ")) {
-      const path = crumb.replace("User navigated to ", "");
-      return `  await page.goto('http://localhost:3000${path}');`;
+      const urlPath = crumb.replace("User navigated to ", "");
+      return `  await page.goto('http://localhost:3000${urlPath}');`;
     }
     if (crumb.startsWith("User clicked ")) {
       const selector = crumb.replace("User clicked ", "");
       return `  await page.locator('${selector}').click();`;
     }
-    return `  // Unknown breadcrumb: ${crumb}`;
+    return `  // Breadcrumb: ${crumb}`;
   });
+
+  const safeTitle = issue.title.replace(/'/g, "\\'");
 
   const testContent = `import { test, expect } from '@playwright/test';
 
 // Auto-generated by T-1000 to reproduce Sentry issue ${issue.id}
 // ${issue.title}
-test('reproduce ${issue.id}: ${issue.title}', async ({ page }) => {
+test('reproduce ${issue.id}: ${safeTitle}', async ({ page }) => {
 ${steps.join("\n")}
 
   // Wait for the page to settle after the user action
@@ -207,7 +363,7 @@ async function runT1000Pipeline(): Promise<void> {
   console.log(`\n  ${GREEN}${BOLD}Server detected${RESET} on http://localhost:3000`);
 
   // Step A
-  const issue = fetchLatestSentryIssue();
+  const issue = await fetchLatestSentryIssue();
 
   // Step B
   const testPath = generatePlaywrightTest(issue);
