@@ -34,10 +34,9 @@ function calculateTotal(cart: Cart): number {
     0
   );
 
-  // BUG: cart.discount is undefined when no coupon is applied,
-  // but this code unconditionally accesses .percentage on it.
-  // This causes: TypeError: Cannot read properties of undefined (reading 'percentage')
-  const discountMultiplier = (100 - cart.discount.percentage) / 100;
+  const discountMultiplier = cart.discount
+    ? (100 - cart.discount.percentage) / 100
+    : 1;
 
   return Math.round(subtotal * discountMultiplier * 100) / 100;
 }
