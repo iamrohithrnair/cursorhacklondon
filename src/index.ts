@@ -432,18 +432,21 @@ function shipFix(issue: SentryIssue): void {
   try {
     execSync(`git push origin ${branch} --force`, { stdio: "inherit" });
     
-    // Build PR body - escape any backticks in issue data
+    // Build PR body - no markdown backticks to avoid shell interpretation issues
     const prBody = `## Automated Fix by T-1000
 
 **Sentry Issue:** ${issue.id}
 **Error:** ${issue.title}
-**Trace:** \`${issue.trace}\`
-**Endpoint:** \`${issue.requestMethod} ${issue.requestPath}\`
+**Trace:** ${issue.trace}
+**Endpoint:** ${issue.requestMethod} ${issue.requestPath}
 
 This fix was detected, reproduced with Playwright, and validated automatically.`;
 
+    // Escape double quotes and backticks for bash
+    const escapedBody = prBody.replace(/"/g, '\\"').replace(/`/g, '\\`');
+    
     execSync(
-      `gh pr create --title "T-1000: Fix ${issue.id}" --body "${prBody.replace(/"/g, '\\"')}"`,
+      `gh pr create --title "T-1000: Fix ${issue.id}" --body "${escapedBody}"`,
       { stdio: "inherit", shell: "/bin/bash" },
     );
     console.log(`\n${GREEN}${BOLD}[T-1000] PR created successfully!${RESET}`);
