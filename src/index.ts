@@ -447,8 +447,10 @@ This fix was detected, reproduced with Playwright, and validated automatically.`
       { stdio: "inherit", shell: "/bin/bash" },
     );
     console.log(`\n${GREEN}${BOLD}[T-1000] PR created successfully!${RESET}`);
-  } catch {
-    console.log(`\n${YELLOW}${BOLD}[T-1000] Branch pushed. PR creation skipped (gh CLI issue).${RESET}`);
+  } catch (err: any) {
+    console.log(`\n${YELLOW}${BOLD}[T-1000] Branch pushed. PR creation failed:${RESET}`);
+    console.log(`  ${RED}${err.message || err}${RESET}`);
+    if (err.stderr) console.log(`  ${DIM}${err.stderr.toString()}${RESET}`);
   }
 
   // Return to main so the next heal run starts clean
